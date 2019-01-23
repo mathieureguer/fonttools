@@ -4,6 +4,7 @@
 
 from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
+from fontTools.cffLib import maxStackLimit
 
 
 def stringToProgram(string):
@@ -26,26 +27,63 @@ def programToString(program):
 	return ' '.join(str(x) for x in program)
 
 
-def programToCommands(program):
+def programToCommands(program, deltasToSourceValues=None, num_regions=0):
 	"""Takes a T2CharString program list and returns list of commands.
 	Each command is a two-tuple of commandname,arg-list.  The commandname might
 	be empty string if no commandname shall be emitted (used for glyph width,
 	hintmask/cntrmask argument, as well as stray arguments at the end of the
-	program (¯\_(ツ)_/¯)."""
+	program. The latter happens in subroutines.
+	Note that each 'blend' operator and its argument list is  replaced by a
+	list of arguments in which each argument item is a list of source font
+	values.
+	'deltasToSourceValues' can be from varLib.varStore.VarDataItem."""
 
 	width = None
 	commands = []
 	stack = []
+	seen_blend = False
+	seen_op = False
+	if num_regions != 0:
+		num_sources = num_regions + 1
+
 	it = iter(program)
 	for token in it:
 		if not isinstance(token, basestring):
 			stack.append(token)
 			continue
+		if token == 'blend':
+			# if we see a blend, it is a CFF charstring, and there
+			# is never a width arg.
+			if not seen_op:
+				seen_op = True
+			num_blends = stack.pop()
+			if not seen_blend:
+				seen_blend = True
+				assert deltasToSourceValues is not None, (
+					"Cannot process charstring without varDataItem argument")
 
-		if width is None and token in {'hstem', 'hstemhm', 'vstem', 'vstemhm',
-					       'cntrmask', 'hintmask',
-					       'hmoveto', 'vmoveto', 'rmoveto',
-					       'endchar'}:
+			num_args = num_sources * num_blends
+			argi = len(stack) - num_args
+			# argi is the index of first blend arg, aka first default font value
+			# We will replace this with a list for the source font values.
+			end_args = tuplei = argi + num_blends
+			while argi < end_args:
+				next_ti = tuplei + num_regions
+				deltas = stack[tuplei:next_ti]
+				default_value = stack[argi]
+				blend_list = deltasToSourceValues(default_value, deltas)
+				stack[argi] = blend_list
+				tuplei = next_ti
+				argi += 1
+			del stack[-(num_args- num_blends):]
+			# convert blend op to blend value list args
+			continue
+			
+		if not seen_op and token in {'hstem', 'hstemhm', 'vstem', 'vstemhm',
+						   'cntrmask', 'hintmask',
+						   'hmoveto', 'vmoveto', 'rmoveto',
+						   'endchar'}:
+			seen_op = True
 			parity = token in {'hmoveto', 'vmoveto'}
 			if stack and (len(stack) % 2) ^ parity:
 				width = stack.pop(0)
@@ -64,12 +102,60 @@ def programToCommands(program):
 	return commands
 
 
-def commandsToProgram(commands):
+def commandsToProgram(commands, get_deltas=None, round_func=None):
 	"""Takes a commands list as returned by programToCommands() and converts
-	it back to a T2CharString program list."""
+	it back to a T2CharString program list.
+	'get_deltas' can be from either
+	varLib.models.getDeltas or varLib.varStore.VarDataItem.get_deltas"""
 	program = []
 	for op,args in commands:
-		program.extend(args)
+		if get_deltas is None:
+			# assume that there are no blend argument lists.
+			program.extend(args)
+		else:
+			# any item in args may be a list of source font values.
+			num_args = len(args)
+			stack_use = 0
+			i = 0
+			while i < num_args:
+				arg = args[i]
+				if not isinstance(arg, list):
+					program.append(arg)
+					i += 1
+					stack_use += 1
+				else:
+					prev_stack_use = stack_use
+					""" The arg is a tuple of blend values.
+					These are each (master 0,master 1..master n)
+					Combine as many successive tuples as we can,
+					up to the max stack limit.
+					"""
+					num_sources = len(arg)
+					blendlist = [arg]
+					i += 1
+					stack_use += 1 + num_sources  # 1 for the num_blends arg
+					while (i < num_args) and isinstance(args[i], list):
+						blendlist.append(args[i])
+						i += 1
+						stack_use += num_sources
+						if stack_use + num_sources > maxStackLimit:
+							# if we are here, max stack is is the CFF2 max stack.
+							break
+					num_blends = len(blendlist)
+					# append the 'num_blends' default font values
+					for arg in blendlist:
+						if round_func:
+							arg[0] = round_func(arg[0])
+						program.append(arg[0])
+					for arg in blendlist:
+						# for each coordinate tuple, append the region deltas
+						deltas = get_deltas(arg)[1:]
+						if round_func:
+							deltas = [round_func(delta) for delta in deltas]
+						program.extend(deltas)
+					program.append(num_blends)
+					program.append('blend')
+					stack_use = prev_stack_use + num_blends
 		if op:
 			program.append(op)
 	return program
@@ -232,7 +318,7 @@ def generalizeProgram(program, **kwargs):
 def _categorizeVector(v):
 	"""
 	Takes X,Y vector v and returns one of r, h, v, or 0 depending on which
-	of X and/or Y are zero, plus tuple of nonzero ones.  If both are zero,
+	of X and/or Y are zero, plus tuple of nonzero ones.	 If both are zero,
 	it returns a single zero still.
 
 	>>> _categorizeVector((0,0))
@@ -268,32 +354,32 @@ def _negateCategory(a):
 	return a
 
 def specializeCommands(commands,
-		       ignoreErrors=False,
-		       generalizeFirst=True,
-		       preserveTopology=False,
-		       maxstack=48):
+			   ignoreErrors=False,
+			   generalizeFirst=True,
+			   preserveTopology=False,
+			   maxstack=48):
 
 	# We perform several rounds of optimizations.  They are carefully ordered and are:
 	#
 	# 0. Generalize commands.
-	#    This ensures that they are in our expected simple form, with each line/curve only
-	#    having arguments for one segment, and using the generic form (rlineto/rrcurveto).
-	#    If caller is sure the input is in this form, they can turn off generalization to
-	#    save time.
+	#	 This ensures that they are in our expected simple form, with each line/curve only
+	#	 having arguments for one segment, and using the generic form (rlineto/rrcurveto).
+	#	 If caller is sure the input is in this form, they can turn off generalization to
+	#	 save time.
 	#
 	# 1. Combine successive rmoveto operations.
 	#
 	# 2. Specialize rmoveto/rlineto/rrcurveto operators into horizontal/vertical variants.
-	#    We specialize into some, made-up, variants as well, which simplifies following
-	#    passes.
+	#	 We specialize into some, made-up, variants as well, which simplifies following
+	#	 passes.
 	#
 	# 3. Merge or delete redundant operations, to the extent requested.
-	#    OpenType spec declares point numbers in CFF undefined.  As such, we happily
-	#    change topology.  If client relies on point numbers (in GPOS anchors, or for
-	#    hinting purposes(what?)) they can turn this off.
+	#	 OpenType spec declares point numbers in CFF undefined.	 As such, we happily
+	#	 change topology.  If client relies on point numbers (in GPOS anchors, or for
+	#	 hinting purposes(what?)) they can turn this off.
 	#
 	# 4. Peephole optimization to revert back some of the h/v variants back into their
-	#    original "relative" operator (rline/rrcurveto) if that saves a byte.
+	#	 original "relative" operator (rline/rrcurveto) if that saves a byte.
 	#
 	# 5. Combine adjacent operators when possible, minding not to go over max stack size.
 	#
@@ -320,18 +406,18 @@ def specializeCommands(commands,
 	# 2. Specialize rmoveto/rlineto/rrcurveto operators into horizontal/vertical variants.
 	#
 	# We, in fact, specialize into more, made-up, variants that special-case when both
-	# X and Y components are zero.  This simplifies the following optimization passes.
+	# X and Y components are zero.	This simplifies the following optimization passes.
 	# This case is rare, but OCD does not let me skip it.
 	#
 	# After this round, we will have four variants that use the following mnemonics:
 	#
-	#  - 'r' for relative,   ie. non-zero X and non-zero Y,
+	#  - 'r' for relative,	 ie. non-zero X and non-zero Y,
 	#  - 'h' for horizontal, ie. zero X and non-zero Y,
-	#  - 'v' for vertical,   ie. non-zero X and zero Y,
-	#  - '0' for zeros,      ie. zero X and zero Y.
+	#  - 'v' for vertical,	 ie. non-zero X and zero Y,
+	#  - '0' for zeros,		 ie. zero X and zero Y.
 	#
 	# The '0' pseudo-operators are not part of the spec, but help simplify the following
-	# optimization rounds.  We resolve them at the end.  So, after this, we will have four
+	# optimization rounds.	We resolve them at the end.	 So, after this, we will have four
 	# moveto and four lineto variants:
 	#
 	#  - 0moveto, 0lineto
@@ -339,25 +425,25 @@ def specializeCommands(commands,
 	#  - vmoveto, vlineto
 	#  - rmoveto, rlineto
 	#
-	# and sixteen curveto variants.  For example, a '0hcurveto' operator means a curve
+	# and sixteen curveto variants.	 For example, a '0hcurveto' operator means a curve
 	# dx0,dy0,dx1,dy1,dx2,dy2,dx3,dy3 where dx0, dx1, and dy3 are zero but not dx3.
 	# An 'rvcurveto' means dx3 is zero but not dx0,dy0,dy3.
 	#
-	# There are nine different variants of curves without the '0'.  Those nine map exactly
+	# There are nine different variants of curves without the '0'.	Those nine map exactly
 	# to the existing curve variants in the spec: rrcurveto, and the four variants hhcurveto,
 	# vvcurveto, hvcurveto, and vhcurveto each cover two cases, one with an odd number of
 	# arguments and one without.  Eg. an hhcurveto with an extra argument (odd number of
 	# arguments) is in fact an rhcurveto.  The operators in the spec are designed such that
 	# all four of rhcurveto, rvcurveto, hrcurveto, and vrcurveto are encodable for one curve.
 	#
-	# Of the curve types with '0', the 00curveto is equivalent to a lineto variant.  The rest
+	# Of the curve types with '0', the 00curveto is equivalent to a lineto variant.	 The rest
 	# of the curve types with a 0 need to be encoded as a h or v variant.  Ie. a '0' can be
-	# thought of a "don't care" and can be used as either an 'h' or a 'v'.  As such, we always
-	# encode a number 0 as argument when we use a '0' variant.  Later on, we can just substitute
+	# thought of a "don't care" and can be used as either an 'h' or a 'v'.	As such, we always
+	# encode a number 0 as argument when we use a '0' variant.	Later on, we can just substitute
 	# the '0' with either 'h' or 'v' and it works.
 	#
 	# When we get to curve splines however, things become more complicated...  XXX finish this.
-	# There's one more complexity with splines.  If one side of the spline is not horizontal or
+	# There's one more complexity with splines.	 If one side of the spline is not horizontal or
 	# vertical (or zero), ie. if it's 'r', then it limits which spline types we can encode.
 	# Only hhcurveto and vvcurveto operators can encode a spline starting with 'r', and
 	# only hvcurveto and vhcurveto operators can encode a spline ending with 'r'.
@@ -397,7 +483,6 @@ def specializeCommands(commands,
 	# For Type2 CharStrings the sequence is:
 	# w? {hs* vs* cm* hm* mt subpath}? {mt subpath}* endchar"
 
-
 	# Some other redundancies change topology (point numbers).
 	if not preserveTopology:
 		for i in range(len(commands)-1, -1, -1):
@@ -417,17 +502,31 @@ def specializeCommands(commands,
 				continue
 
 			# Merge adjacent hlineto's and vlineto's.
+			# In CFF2 charstrings from variable fonts, each
+			# arg item may be a list of blendable values, one from
+			# each source font.
 			if (i and op in {'hlineto', 'vlineto'} and
-					(op == commands[i-1][0]) and
-					(not isinstance(args[0], list))):
+							(op == commands[i-1][0])):
 				_, other_args = commands[i-1]
 				assert len(args) == 1 and len(other_args) == 1
-				commands[i-1] = (op, [other_args[0]+args[0]])
+				arg0 = args[0]
+				arg1 = other_args[0]
+				if isinstance(arg0, list):
+					if isinstance(arg1, list):
+						new_args = [[a1 + a2 for a1, a2 in zip(arg0, arg1)]]
+					else:
+						new_args = [[a1 + arg1 for a1 in arg0]]
+				else:
+					if isinstance(arg1, list):
+						new_args = [[arg0 + a1 for a1 in arg1]]
+					else:
+						new_args = [arg0 + arg1]
+				commands[i-1] = (op, new_args)
 				del commands[i]
 				continue
 
 	# 4. Peephole optimization to revert back some of the h/v variants back into their
-	#    original "relative" operator (rline/rrcurveto) if that saves a byte.
+	#	 original "relative" operator (rline/rrcurveto) if that saves a byte.
 	for i in range(1, len(commands)-1):
 		op,args = commands[i]
 		prv,nxt = commands[i-1][0], commands[i+1][0]
@@ -536,6 +635,7 @@ def specializeCommands(commands,
 
 	return commands
 
+
 def specializeProgram(program, **kwargs):
 	return commandsToProgram(specializeCommands(programToCommands(program), **kwargs))
 
@@ -554,4 +654,3 @@ if __name__ == '__main__':
 	assert program == program2
 	print("Generalized program:"); print(programToString(generalizeProgram(program)))
 	print("Specialized program:"); print(programToString(specializeProgram(program)))
-
