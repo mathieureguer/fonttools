@@ -67,11 +67,13 @@ def interpolate_cff2_charstrings(topDict, interpolateFromDeltas, glyphOrder):
 		# Interpolate charstring
 		charstring = charstrings[gname]
 		pd = charstring.private
-		vsindex = pd.vsindex if (hasattr(pd, 'vsindex')) else 0
+		vsindex = charstring.vsindex
 		num_regions = pd.getNumRegions(vsindex)
 		numMasters = num_regions + 1
 		new_program = []
 		last_i = 0
+		if charstring.program[1] == 'vsindex':
+			del charstring.program[:2]
 		for i, token in enumerate(charstring.program):
 			if token == 'blend':
 				num_args = charstring.program[i - 1]
