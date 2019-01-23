@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<ttFont sfntVersion="OTTO" ttLibVersion="3.32">
+<ttFont sfntVersion="OTTO" ttLibVersion="3.33">
 
   <fvar>
 
@@ -146,9 +146,10 @@
           hlineto
         </CharString>
         <CharString name="T">
-          258 26 -44 1 blend
+          1 vsindex
+          258 26 1 blend
           hmoveto
-          84 585 217 71 -518 -71 217 -585 -52 88 47 -79 17 -30 -43 73 18 -28 43 -73 17 -30 -47 79 8 blend
+          84 585 217 71 -518 -71 217 -585 -52 47 17 -43 18 43 17 -47 8 blend
           hlineto
         </CharString>
         <CharString name="dollar">
@@ -246,13 +247,19 @@
             </VarRegionAxis>
           </Region>
         </VarRegionList>
-        <!-- VarDataCount=1 -->
+        <!-- VarDataCount=2 -->
         <VarData index="0">
           <!-- ItemCount=0 -->
           <NumShorts value="0"/>
           <!-- VarRegionCount=2 -->
           <VarRegionIndex index="0" value="0"/>
           <VarRegionIndex index="1" value="1"/>
+        </VarData>
+        <VarData index="1">
+          <!-- ItemCount=0 -->
+          <NumShorts value="0"/>
+          <!-- VarRegionCount=1 -->
+          <VarRegionIndex index="0" value="0"/>
         </VarData>
       </VarStore>
     </CFFFont>
