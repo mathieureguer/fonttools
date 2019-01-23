@@ -952,6 +952,22 @@ class T2CharString(object):
 		else:
 			return "<%s (bytecode) at %x>" % (self.__class__.__name__, id(self))
 
+	def __getattr__(self, name):
+		if name == 'vsindex':
+			pd = self.private
+			if not pd:
+				return None
+
+			if self.needsDecompilation():
+				self.decompile()
+			default_vsindex = pd.vsindex if hasattr(pd, 'vsindex') else 0
+			if len(self.program) > 1 and self.program[1] == 'vsindex':
+				vsindex = self.program[0]
+			else:
+				vsindex = default_vsindex
+			return vsindex
+		raise AttributeError
+
 	def getIntEncoder(self):
 		return encodeIntT2
 
