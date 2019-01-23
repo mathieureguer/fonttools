@@ -457,7 +457,8 @@ t1Operators = [
 
 class T2WidthExtractor(SimpleT2Decompiler):
 
-	def __init__(self, localSubrs, globalSubrs, nominalWidthX, defaultWidthX, private=None):
+	def __init__(self, localSubrs, globalSubrs,
+					nominalWidthX, defaultWidthX, private=None):
 		SimpleT2Decompiler.__init__(self, localSubrs, globalSubrs, private)
 		self.nominalWidthX = nominalWidthX
 		self.defaultWidthX = defaultWidthX
@@ -471,8 +472,10 @@ class T2WidthExtractor(SimpleT2Decompiler):
 		args = self.popall()
 		if not self.gotWidth:
 			if evenOdd ^ (len(args) % 2):
-				# For CFF2 charstrings, this should never happen
-				assert self.defaultWidthX is not None, "CFF2 CharStrings must not have an initial width value"
+				# For CFF2 charstrings, which have a defaultWidthX of None,
+				# this should never happen.
+				assert self.defaultWidthX is not None, (
+					"CFF2 CharStrings must not have an initial width value")
 				self.width = self.nominalWidthX + args[0]
 				args = args[1:]
 			else:
@@ -499,9 +502,11 @@ class T2WidthExtractor(SimpleT2Decompiler):
 
 class T2OutlineExtractor(T2WidthExtractor):
 
-	def __init__(self, pen, localSubrs, globalSubrs, nominalWidthX, defaultWidthX, private=None):
+	def __init__(self, pen, localSubrs, globalSubrs,
+					nominalWidthX, defaultWidthX, private=None):
 		T2WidthExtractor.__init__(
-			self, localSubrs, globalSubrs, nominalWidthX, defaultWidthX, private)
+			self, localSubrs, globalSubrs,
+			nominalWidthX, defaultWidthX, private)
 		self.pen = pen
 
 	def reset(self):

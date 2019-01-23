@@ -121,10 +121,11 @@ def convertCFFtoCFF2(varFont):
 
 class MergeDictError(TypeError):
 	def __init__(self, key, value, values):
-		error_msg = ["For the Private Dict key '{}', ".format(key),
-					 "the default font value list:",
-					 "\t{}".format(value),
-					 "had a different number of values than a region font:"]
+		error_msg = [
+						"For the Private Dict key '{}', ".format(key),
+						"the default font value list:",
+						"\t{}".format(value),
+						"had a different number of values than a region font:"]
 		error_msg += ["\t{}".format(region_value) for region_value in values]
 		error_msg = os.linesep.join(error_msg)
 
@@ -135,10 +136,11 @@ def conv_to_int(num):
 	return num
 
 
-pd_blend_fields = ("BlueValues", "OtherBlues", "FamilyBlues",
-				   "FamilyOtherBlues", "BlueScale", "BlueShift",
-				   "BlueFuzz", "StdHW", "StdVW", "StemSnapH",
-				   "StemSnapV")
+pd_blend_fields = (
+					"BlueValues", "OtherBlues", "FamilyBlues",
+					"FamilyOtherBlues", "BlueScale", "BlueShift",
+					"BlueFuzz", "StdHW", "StdVW", "StemSnapH",
+					"StemSnapV")
 
 
 def merge_PrivateDicts(top_dicts, model_keys, var_model):
@@ -327,9 +329,10 @@ class MergeTypeError(TypeError):
 					"'{point_type}' at point index {pt_index} in master "
 					"index {m_index} differs from the default font point "
 					"type '{default_type}'"
-					"".format(gname=glyphName,
-							  point_type=point_type, pt_index=pt_index,
-							  m_index=m_index, default_type=default_type)
+					"".format(
+							gname=glyphName,
+							point_type=point_type, pt_index=pt_index,
+							m_index=m_index, default_type=default_type)
 					][0]
 		super(MergeTypeError, self).__init__(self.error_msg)
 
@@ -362,13 +365,15 @@ class CFFToCFF2OutlineExtractor(T2OutlineExtractor):
 class CFF2CharStringMergePen(T2CharStringPen):
 	"""Pen to merge Type 2 CharStrings.
 	"""
-	def __init__(self, default_commands,
-				 glyphName, num_masters, master_idx, roundTolerance=0.5):
+	def __init__(
+				self, default_commands, glyphName, num_masters, master_idx,
+				roundTolerance=0.5, CFF2=True):
 		super(
 			CFF2CharStringMergePen,
-			self).__init__(width=None,
-						   glyphSet=None, CFF2=True,
-						   roundTolerance=roundTolerance)
+			self).__init__(
+							width=None,
+							glyphSet=None, CFF2=CFF2,
+							roundTolerance=roundTolerance)
 		self.pt_index = 0
 		self._commands = default_commands
 		self.m_index = master_idx
