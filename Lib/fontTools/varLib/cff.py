@@ -143,7 +143,18 @@ pd_blend_fields = (
 					"StemSnapV")
 
 
-def merge_PrivateDicts(top_dicts, model_keys, var_model):
+def get_private(regionFDArrays, fd_index, ri, fd_map):
+	region_fdArray = regionFDArrays[ri]
+	region_fd_map = fd_map[fd_index]
+	if ri in region_fd_map:
+		region_fdIndex = region_fd_map[ri]
+		private = region_fdArray[region_fdIndex].Private
+	else:
+		private = None
+	return private
+
+
+def merge_PrivateDicts(top_dicts, vsindex_dict, var_model, fd_map):
 	"""
 	I step through the FontDicts in the FDArray of the varfont TopDict.
 	For each varfont FontDict:
@@ -170,14 +181,22 @@ def merge_PrivateDicts(top_dicts, model_keys, var_model):
 		# At the moment, no PrivateDict has a vsindex key, but let's support
 		# how it should work. See comment at end of
 		# merge_charstrings() - still need to optimize use of vsindex.
-		sub_model, _t = var_model.getSubModel(model_keys[vsindex])
+		sub_model, model_keys = vsindex_dict[vsindex]
 		master_indices = []
 		for loc in sub_model.locations[1:]:
 			i = var_model.locations.index(loc) - 1
 			master_indices.append(i)
-		pds = [private_dict] + [
-			regionFDArrays[i][fd_index].Private for i in master_indices
-			]
+		pds = [private_dict]
+		last_pd = private_dict
+		for ri in master_indices:
+			pd = get_private(regionFDArrays, fd_index, ri, fd_map)
+			# If the region font doesn't have this FontDict, just reference
+			# the last one used.
+			if pd is None:
+				pd = last_pd
+			else:
+				last_pd = pd
+			pds.append(pd)
 		num_masters = len(pds)
 		for key, value in private_dict.rawDict.items():
 			if key not in pd_blend_fields:
@@ -238,6 +257,47 @@ def merge_PrivateDicts(top_dicts, model_keys, var_model):
 			private_dict.rawDict[key] = dataList
 
 
+def getfd_map(varFont, fonts_list):
+	""" Since a subset source font may have fewer FontDicts in their
+	FDArray than the default font, we have to match up the FontDicts in
+	the different fonts . We do this with the FDSelect array, and by
+	assuming that the same glyph will reference  matching FontDicts in
+	each source font. We return a mapping from fdIndex in the default
+	font to a dictionary which maps each master list index of each
+	region font to the equivalent fdIndex in the region font."""
+	fd_map = {}
+	default_font = fonts_list[0]
+	region_fonts = fonts_list[1:]
+	num_regions = len(region_fonts)
+	topDict = default_font['CFF '].cff.topDictIndex[0]
+	if not hasattr(topDict, 'FDSelect'):
+		fd_map[0] = [0]*num_regions
+		return fd_map
+
+	gname_mapping = {}
+	default_fdSelect = topDict.FDSelect
+	glyphOrder = default_font.getGlyphOrder()
+	for gid, fdIndex in enumerate(default_fdSelect):
+		gname_mapping[glyphOrder[gid]] = fdIndex
+		if fdIndex not in fd_map:
+			fd_map[fdIndex] = {}
+	for ri, region_font in enumerate(region_fonts):
+		region_glyphOrder = region_font.getGlyphOrder()
+		region_topDict = region_font['CFF '].cff.topDictIndex[0]
+		if not hasattr(region_topDict, 'FDSelect'):
+			# All the glyphs share the same FontDict. Pick any glyph.
+			default_fdIndex = gname_mapping[region_glyphOrder[0]]
+			fd_map[default_fdIndex][ri] = 0
+		else:
+			region_fdSelect = region_topDict.FDSelect
+			for gid, fdIndex in enumerate(region_fdSelect):
+				default_fdIndex = gname_mapping[region_glyphOrder[gid]]
+				region_map = fd_map[default_fdIndex]
+				if ri not in region_map:
+					region_map[ri] = fdIndex
+	return fd_map
+
+
 def merge_region_fonts(varFont, model, ordered_fonts_list, glyphOrder):
 	topDict = varFont['CFF2'].cff.topDictIndex[0]
 	top_dicts = [topDict] + [
@@ -245,10 +305,11 @@ def merge_region_fonts(varFont, model, ordered_fonts_list, glyphOrder):
 			for ttFont in ordered_fonts_list[1:]
 				]
 	num_masters = len(model.mapping)
-	(var_data_list, master_supports, 
-		model_key_list) = merge_charstrings(
+	(var_data_list, master_supports,
+		vsindex_dict) = merge_charstrings(
 							glyphOrder, num_masters, top_dicts, model)
-	merge_PrivateDicts(top_dicts, model_key_list, model)
+	fd_map = getfd_map(varFont, ordered_fonts_list)
+	merge_PrivateDicts(top_dicts, vsindex_dict, model, fd_map)
 	addCFFVarStore(varFont, model, var_data_list, master_supports)
 
 
@@ -264,9 +325,10 @@ def merge_charstrings(glyphOrder, num_masters, top_dicts, masterModel):
 	var_data_list = []
 	master_supports = []
 	default_charstrings = top_dicts[0].CharStrings
-	for gname in glyphOrder:
-		all_cs = [_get_cs(glyphOrder, td.CharStrings, gname)
-					for td in top_dicts]
+	for gid, gname in enumerate(glyphOrder):
+		all_cs = [
+				_get_cs(glyphOrder, td.CharStrings, gname)
+				for td in top_dicts]
 		if len([gs for gs in all_cs if gs is not None]) == 1:
 			continue
 		model, model_cs = masterModel.getSubModel(all_cs)
@@ -295,11 +357,18 @@ def merge_charstrings(glyphOrder, num_masters, top_dicts, masterModel):
 			var_model=model, optimize=True)
 		default_charstrings[gname] = new_cs
 
+		if (not var_pen.seen_moveto) or ('blend' not in new_cs.program):
+			# If this is not a marking glyph, or if there are no blend
+			# arguments, then we can use vsindex 0. No need to
+			# check if we need a new vsindex.
+			continue
+
 		# If the charstring required a new model, create
 		# a VarData table to go with, and set vsindex.
 		try:
 			key = tuple(v is not None for v in all_cs)
 			vsindex = vsindex_dict[key]
+			vsindex_dict[vsindex] = (model, key)
 		except KeyError:
 			varTupleIndexes = []
 			for support in model.supports[1:]:
@@ -308,7 +377,7 @@ def merge_charstrings(glyphOrder, num_masters, top_dicts, masterModel):
 				varTupleIndexes.append(master_supports.index(support))
 			var_data = varLib.builder.buildVarData(varTupleIndexes, None, False)
 			vsindex = len(vsindex_dict)
-			vsindex_dict[key] = vsindex
+			vsindex_dict[vsindex] = (model, key)
 			var_data_list.append(var_data)
 		# We do not need to check for an existing new_cs.private.vsindex,
 		# as we know it doesn't exist yet.
@@ -316,25 +385,22 @@ def merge_charstrings(glyphOrder, num_masters, top_dicts, masterModel):
 			new_cs.program[:0] = [vsindex, 'vsindex']
 
 	# XXX To do: optimize use of vsindex between the PrivateDicts
-	# and the charstrings.
-	model_key_list = list(vsindex_dict.keys())
-	# As of Python 3.7, dict key order is guaranteed to be same as added order.
-	return var_data_list, master_supports, model_key_list
+	return var_data_list, master_supports, vsindex_dict
 
 
 class MergeTypeError(TypeError):
 	def __init__(self, point_type, pt_index, m_index, default_type, glyphName):
-		self.error_msg = [
-					"In glyph '{gname}' "
-					"'{point_type}' at point index {pt_index} in master "
-					"index {m_index} differs from the default font point "
-					"type '{default_type}'"
-					"".format(
-							gname=glyphName,
-							point_type=point_type, pt_index=pt_index,
-							m_index=m_index, default_type=default_type)
-					][0]
-		super(MergeTypeError, self).__init__(self.error_msg)
+			self.error_msg = [
+						"In glyph '{gname}' "
+						"'{point_type}' at point index {pt_index} in master "
+						"index {m_index} differs from the default font point "
+						"type '{default_type}'"
+						"".format(
+								gname=glyphName,
+								point_type=point_type, pt_index=pt_index,
+								m_index=m_index, default_type=default_type)
+						][0]
+			super(MergeTypeError, self).__init__(self.error_msg)
 
 
 def makeRoundNumberFunc(tolerance):
@@ -348,10 +414,9 @@ def makeRoundNumberFunc(tolerance):
 
 
 class CFFToCFF2OutlineExtractor(T2OutlineExtractor):
-	""" This class is used to remove the initial width
-	from the CFF charstring without adding the width
-	to self.nominalWidthX, which is None.
-	"""
+	""" This class is used to remove the initial width from the CFF
+	charstring without trying to add the width to self.nominalWidthX,
+	which is None. """
 	def popallWidth(self, evenOdd=0):
 		args = self.popall()
 		if not self.gotWidth:
@@ -379,6 +444,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
 		self.m_index = master_idx
 		self.num_masters = num_masters
 		self.prev_move_idx = 0
+		self.seen_moveto = False
 		self.glyphName = glyphName
 		self.roundNumber = makeRoundNumberFunc(roundTolerance)
 
@@ -402,6 +468,8 @@ class CFF2CharStringMergePen(T2CharStringPen):
 		return list(self._p0)
 
 	def _moveTo(self, pt):
+		if not self.seen_moveto:
+			self.seen_moveto = True
 		pt_coords = self._p(pt)
 		self.add_point('rmoveto', pt_coords)
 		# I set prev_move_idx here because add_point()

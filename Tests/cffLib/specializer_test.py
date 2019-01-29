@@ -919,6 +919,7 @@ class CFFSpecializeProgramTest(unittest.TestCase):
         xpct_charstr = (operands*2 + operator + operands*7 + operator).rstrip()
         self.assertEqual(get_specialized_charstr(test_charstr), xpct_charstr)
 
+
 class CFF2VFTestSpecialize(unittest.TestCase):
 
     def __init__(self, methodName):
@@ -944,15 +945,20 @@ class CFF2VFTestSpecialize(unittest.TestCase):
             print(glyphName)
             cs = charstrings[glyphName]
             cs.decompile()
-            varDataItem = VarDataItem(topDict.VarStore.otVarStore, cs.vsindex, fvar.axes)
-            cmds = programToCommands(cs.program,
-                                    varDataItem.deltasToSourceValues,
-                                    varDataItem.num_regions)
+            varDataItem = VarDataItem(
+                            topDict.VarStore.otVarStore,
+                            cs.vsindex, fvar.axes)
+            cmds = programToCommands(
+                            cs.program,
+                            varDataItem.deltasToSourceValues,
+                            varDataItem.num_regions)
             cmds = generalizeCommands(cmds)
             cmds = specializeCommands(cmds)
-            program = commandsToProgram(cmds, get_deltas=varDataItem.get_deltas, round_func=otRound)
+            program = commandsToProgram(
+                            cmds, get_deltas=varDataItem.get_deltas,
+                            round_func=otRound)
             self.assertEqual(program, cs.program)
- 
+
 
 if __name__ == "__main__":
     import sys
