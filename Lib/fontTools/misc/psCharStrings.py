@@ -457,7 +457,8 @@ t1Operators = [
 
 class T2WidthExtractor(SimpleT2Decompiler):
 
-	def __init__(self, localSubrs, globalSubrs, nominalWidthX, defaultWidthX, private=None):
+	def __init__(self, localSubrs, globalSubrs,
+					nominalWidthX, defaultWidthX, private=None):
 		SimpleT2Decompiler.__init__(self, localSubrs, globalSubrs, private)
 		self.nominalWidthX = nominalWidthX
 		self.defaultWidthX = defaultWidthX
@@ -471,8 +472,10 @@ class T2WidthExtractor(SimpleT2Decompiler):
 		args = self.popall()
 		if not self.gotWidth:
 			if evenOdd ^ (len(args) % 2):
-				# For CFF2 charstrings, this should never happen
-				assert self.defaultWidthX is not None, "CFF2 CharStrings must not have an initial width value"
+				# For CFF2 charstrings, which have a defaultWidthX of None,
+				# this should never happen.
+				assert self.defaultWidthX is not None, (
+					"CFF2 CharStrings must not have an initial width value")
 				self.width = self.nominalWidthX + args[0]
 				args = args[1:]
 			else:
@@ -499,9 +502,11 @@ class T2WidthExtractor(SimpleT2Decompiler):
 
 class T2OutlineExtractor(T2WidthExtractor):
 
-	def __init__(self, pen, localSubrs, globalSubrs, nominalWidthX, defaultWidthX, private=None):
+	def __init__(self, pen, localSubrs, globalSubrs,
+					nominalWidthX, defaultWidthX, private=None):
 		T2WidthExtractor.__init__(
-			self, localSubrs, globalSubrs, nominalWidthX, defaultWidthX, private)
+			self, localSubrs, globalSubrs,
+			nominalWidthX, defaultWidthX, private)
 		self.pen = pen
 
 	def reset(self):
@@ -951,6 +956,22 @@ class T2CharString(object):
 			return "<%s (source) at %x>" % (self.__class__.__name__, id(self))
 		else:
 			return "<%s (bytecode) at %x>" % (self.__class__.__name__, id(self))
+
+	def __getattr__(self, name):
+		if name == 'vsindex':
+			pd = self.private
+			if not pd:
+				return None
+
+			if self.needsDecompilation():
+				self.decompile()
+			default_vsindex = pd.vsindex if hasattr(pd, 'vsindex') else 0
+			if len(self.program) > 1 and self.program[1] == 'vsindex':
+				vsindex = self.program[0]
+			else:
+				vsindex = default_vsindex
+			return vsindex
+		raise AttributeError
 
 	def getIntEncoder(self):
 		return encodeIntT2
