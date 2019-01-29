@@ -298,8 +298,13 @@ class VariationModel(object):
 
 			locAxes = set(loc.keys())
 			# Walk over previous masters now
-			for j,m in enumerate(locations[:i]):
-				# Master with extra axes do not participte
+			for j,m in enumerate(locations[:i+2]):
+				if i == j:
+					continue
+				# Need to iterate through i+2 in order to set both the
+				# lower and upper values of the (lower, peak, upeer)
+				# triplet for intermediate masters.
+				# Master with extra axes do not participate
 				if not set(m.keys()).issubset(locAxes):
 					continue
 				# If it's NOT in the current box, it does not participate
